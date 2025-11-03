@@ -6,8 +6,8 @@
   <title>Google Drive 슬라이드쇼</title>
   <style>
     :root{
-      --bg: #000;       /* 배경(레터박스) */
-      --fg: #fff;       /* 글자색 */
+      --bg: #000;
+      --fg: #fff;
       --muted:#bbb;
       --accent:#7cc;
     }
@@ -18,9 +18,12 @@
       font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif;
     }
     .app{height:100%; display:grid; grid-template-rows:auto 1fr auto}
-    header, footer{display:flex; align-items:center; gap:.75rem; padding:.6rem .9rem}
+    header, footer{display:flex; align-items:center; gap:.75rem; padding:.6rem .9rem; transition:all 0.6s ease;}
     header{justify-content:space-between; background:rgba(255,255,255,.06);}
     footer{justify-content:center; background:rgba(255,255,255,.04);}
+    header.hidden-ui, footer.hidden-ui{opacity:0; pointer-events:none;}
+    header.hidden-ui{transform:translateY(-20px);}
+    footer.hidden-ui{transform:translateY(20px);}
 
     .btn{appearance:none; border:1px solid rgba(255,255,255,.25); background:transparent; color:var(--fg);
       padding:.5rem .8rem; border-radius:999px; cursor:pointer; font-weight:600}
@@ -31,19 +34,20 @@
     .status{font-size:.9rem; color:var(--muted)}
     .spacer{flex:1}
 
-    /* 뷰어: 실제 이미지 비율 유지 + 검은 배경 레터박스 */
     .viewer{
       position:relative; height:100%; width:100%; display:grid;
       place-items:center; background:var(--bg); overflow:hidden;
     }
-    .viewer img{max-width:100%; max-height:100%; object-fit:contain; background:var(--bg)}
+    .viewer img{
+      max-width:100%; max-height:100%; object-fit:contain; background:var(--bg);
+      opacity:0; transition:opacity 1s ease;
+    }
+    .viewer img.visible{opacity:1;}
 
-    /* dots 인디케이터 (필요 시) */
-    .dots{display:flex; gap:.4rem; flex-wrap:wrap; justify-content:center; padding:.4rem}
-    .dot{width:.55rem; height:.55rem; border-radius:50%; border:1px solid rgba(255,255,255,.5); opacity:.6; cursor:pointer}
-    .dot.active{background:var(--fg); opacity:1}
-
-    .hidden{display:none}
+    .counter{
+      position:absolute; bottom:10px; right:20px;
+      background:rgba(0,0,0,0.5); padding:4px 8px; border-radius:6px; font-size:.9rem;
+    }
   </style>
 </head>
 <body>
@@ -54,250 +58,176 @@
         <span class="status" id="status">로그인 필요</span>
       </div>
       <div class="spacer"></div>
-      <!-- 로그인 / 로그아웃 -->
       <button class="btn" id="loginBtn">Google 로그인</button>
       <button class="btn hidden" id="logoutBtn">로그아웃</button>
     </header>
 
     <main class="viewer">
       <img id="slide" alt="사진" />
+      <div class="counter" id="counter">0 / 0</div>
     </main>
 
     <footer>
-      <button class="btn icon-btn" id="prevBtn" title="이전(←)">◀ 이전</button>
-      <button class="btn icon-btn" id="playPauseBtn" title="일시정지/재생">⏸ 일시정지</button>
-      <button class="btn icon-btn" id="nextBtn" title="다음(→)">다음 ▶</button>
-      <button class="btn icon-btn" id="reloadBtn" title="Drive에서 다시 불러오기">🔄 새로고침</button>
+      <button class="btn icon-btn" id="prevBtn">◀ 이전</button>
+      <button class="btn icon-btn" id="playPauseBtn">⏸ 일시정지</button>
+      <button class="btn icon-btn" id="nextBtn">다음 ▶</button>
+      <button class="btn icon-btn" id="reloadBtn">🔄 새로고침</button>
       <span class="spacer"></span>
       <label class="status">전환 간격
         <select id="intervalSelect">
-          <option value="3000">3초</option>
-          <option value="5000" selected>5초</option>
-          <option value="8000">8초</option>
-          <option value="10000">10초</option>
+          <option value="5000">5초</option>
+          <option value="10000" selected>10초</option>
+          <option value="15000">15초</option>
+          <option value="20000">20초</option>
+          <option value="25000">25초</option>
+          <option value="30000">30초</option>
         </select>
       </label>
     </footer>
   </div>
 
-  <!-- Google Identity Services (OAuth 2.0 토큰 전용) -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script>
-    /*** 🔧 설정값: 아래 3가지만 교체하면 작동합니다 ***/
+    /*** 🔧 사용자 설정 ***/
     const GOOGLE_CLIENT_ID = "195530113287-9v9le5k38vjbumgl839pkopn04hv747o.apps.googleusercontent.com"; // GCP OAuth 클라이언트 ID
     const DRIVE_FOLDER_ID  = "1pvgxYx7jSiuCYZAX_UXXiBxTMffRV_at";                          // 대상 폴더 ID
-    const ALLOWED_EMAILS   = ["djshin0457@gmail.com",
-    "djcom@ohyun.ms.kr",
-    "m23djcom@onedu.jje.go.kr"
-      // 이 배열에 허용할 구글 계정 이메일을 넣으면 화이트리스트 검증을 합니다.
-      // 예: "you@example.com", "principal@school.kr"
-    ];
+    const ALLOWED_EMAILS   = [
+      "djshin0457@gmail.com",
+      "djcom@ohyun.ms.kr",
+      "m23djcom@onedu.jje.go.kr"
+    ]; // 허용 이메일 목록
 
-    /*** 상수 & 상태 ***/
     const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
     const API_BASE = "https://www.googleapis.com/drive/v3";
 
-    let tokenClient = null;     // GIS 토큰 클라이언트
-    let accessToken = null;     // 액세스 토큰
-    let userEmail   = null;     // 로그인한 사용자 이메일 (id_token 디코딩)
+    let tokenClient=null, accessToken=null, userEmail=null;
+    let files=[], index=0, timer=null, intervalMs=10000, playing=true;
 
-    let files = [];             // [{id,name,mimeType,modifiedTime}]
-    let index = 0;              // 현재 인덱스
-    let timer = null;           // 슬라이드쇼 타이머
-    let intervalMs = 5000;      // 기본 5초
-    let playing = true;         // 재생/일시정지 상태
+    const statusEl=document.getElementById('status');
+    const slideEl=document.getElementById('slide');
+    const loginBtn=document.getElementById('loginBtn');
+    const logoutBtn=document.getElementById('logoutBtn');
+    const prevBtn=document.getElementById('prevBtn');
+    const nextBtn=document.getElementById('nextBtn');
+    const reloadBtn=document.getElementById('reloadBtn');
+    const playPauseBtn=document.getElementById('playPauseBtn');
+    const intervalSelect=document.getElementById('intervalSelect');
+    const counterEl=document.getElementById('counter');
 
-    /*** DOM ***/
-    const statusEl = document.getElementById('status');
-    const slideEl = document.getElementById('slide');
-    const loginBtn = document.getElementById('loginBtn');
-    const logoutBtn = document.getElementById('logoutBtn');
-    const prevBtn = document.getElementById('prevBtn');
-    const nextBtn = document.getElementById('nextBtn');
-    const reloadBtn = document.getElementById('reloadBtn');
-    const playPauseBtn = document.getElementById('playPauseBtn');
-    const intervalSelect = document.getElementById('intervalSelect');
+    function toast(msg){statusEl.textContent=msg;}
 
-    /*** 유틸: 간단한 토스트 ***/
-    function toast(msg){
-      statusEl.textContent = msg;
-    }
-
-    /*** OAuth 로그인 ***/
-    window.onload = () => {
-      // OAuth 토큰 클라이언트 초기화
-      tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: GOOGLE_CLIENT_ID,
-        scope: DRIVE_SCOPE + ' email profile openid',
-        callback: (resp) => {
+    window.onload=()=>{
+      tokenClient=google.accounts.oauth2.initTokenClient({
+        client_id:GOOGLE_CLIENT_ID,
+        scope:DRIVE_SCOPE+' email profile openid',
+        callback:(resp)=>{
           if(resp && resp.access_token){
-            accessToken = resp.access_token;
-            // 사용자 정보 추출을 위해 ID 토큰도 요청(팁: tokenClient는 id_token 직접 제공 X → 별도 fetch 필요)
-            // 여기서는 간단히 peopleinfo 대신 tokeninfo로 이메일 확인
-            fetch(`https://www.googleapis.com/oauth2/v3/userinfo`, {
-              headers: { Authorization: `Bearer ${accessToken}` }
-            }).then(r=>r.json()).then(info => {
-              userEmail = info.email;
-              // 화이트리스트가 설정되어 있으면 검사
-              if(ALLOWED_EMAILS.length > 0 && !ALLOWED_EMAILS.includes(userEmail)){
-                toast(`허용되지 않은 계정입니다: ${userEmail}`);
-                logoutUI();
-                return;
+            accessToken=resp.access_token;
+            fetch(`https://www.googleapis.com/oauth2/v3/userinfo`,{headers:{Authorization:`Bearer ${accessToken}`}})
+            .then(r=>r.json()).then(info=>{
+              userEmail=info.email;
+              if(ALLOWED_EMAILS.length>0 && !ALLOWED_EMAILS.includes(userEmail)){
+                toast(`허용되지 않은 계정: ${userEmail}`);
+                logoutUI(); return;
               }
               loginUI(info);
-              // 첫 로드
-              loadAllImages().then(() => startSlideshow());
-            }).catch(err => {
-              console.error(err); toast('사용자 정보 조회 실패');
-            });
-          }else{
-            toast('로그인 실패');
-          }
+              loadAllImages().then(()=>startSlideshow());
+            }).catch(()=>toast('사용자 정보 조회 실패'));
+          }else toast('로그인 실패');
         }
       });
 
-      // 버튼 이벤트
-      loginBtn.onclick = requestAccessToken;
-      logoutBtn.onclick = doLogout;
-      prevBtn.onclick = prev;
-      nextBtn.onclick = next;
-      reloadBtn.onclick = async () => {
-        const keep = index; // 현재 인덱스 기억
-        await loadAllImages();
-        // 가능하면 같은 파일로 계속, 없으면 가장 가까운 인덱스로
-        index = Math.min(keep, Math.max(0, files.length - 1));
-        show(index);
-        if(playing) restartTimer();
+      loginBtn.onclick=requestAccessToken;
+      logoutBtn.onclick=doLogout;
+      prevBtn.onclick=prev;
+      nextBtn.onclick=next;
+      reloadBtn.onclick=async()=>{
+        const keep=index; await loadAllImages();
+        index=Math.min(keep,Math.max(0,files.length-1));
+        show(index); if(playing)restartTimer();
         toast('Drive에서 최신 목록을 불러왔습니다');
-      }
-      playPauseBtn.onclick = togglePlay;
-      intervalSelect.onchange = () => {
-        intervalMs = parseInt(intervalSelect.value,10);
-        if(playing) restartTimer();
-      }
+      };
+      playPauseBtn.onclick=togglePlay;
+      intervalSelect.onchange=()=>{
+        intervalMs=parseInt(intervalSelect.value,10);
+        if(playing)restartTimer();
+      };
 
-      // 키보드 단축키
-      window.addEventListener('keydown', (e)=>{
-        if(e.key === 'ArrowLeft') prev();
-        if(e.key === 'ArrowRight') next();
-        if(e.key === ' ') { e.preventDefault(); togglePlay(); }
-        if(e.key.toLowerCase() === 'r') reloadBtn.click();
+      let uiHidden=false;
+      window.addEventListener('keydown',(e)=>{
+        if(e.key==='ArrowLeft')prev();
+        if(e.key==='ArrowRight')next();
+        if(e.key===' '){e.preventDefault();togglePlay();}
+        if(e.key.toLowerCase()==='r')reloadBtn.click();
+        if(e.key.toLowerCase()==='h'){
+          uiHidden=!uiHidden;
+          document.querySelector('header').classList.toggle('hidden-ui',uiHidden);
+          document.querySelector('footer').classList.toggle('hidden-ui',uiHidden);
+        }
+        if(e.key.toLowerCase()==='f') toggleFullScreen();
       });
     }
 
-    function requestAccessToken(){
-      tokenClient.requestAccessToken({ prompt: 'consent' });
-    }
-
+    function requestAccessToken(){tokenClient.requestAccessToken({prompt:'consent'});}
     function loginUI(info){
       loginBtn.classList.add('hidden');
       logoutBtn.classList.remove('hidden');
-      statusEl.textContent = `${info.email} 로그인됨`;
-      prevBtn.disabled = nextBtn.disabled = reloadBtn.disabled = false;
-      playPauseBtn.disabled = false;
+      statusEl.textContent=`${info.email} 로그인됨`;
     }
     function logoutUI(){
       loginBtn.classList.remove('hidden');
       logoutBtn.classList.add('hidden');
-      statusEl.textContent = '로그인 필요';
-      prevBtn.disabled = nextBtn.disabled = reloadBtn.disabled = true;
-      playPauseBtn.disabled = true;
-      stopSlideshow();
-      files = []; index = 0; slideEl.removeAttribute('src');
+      statusEl.textContent='로그인 필요';
+      stopSlideshow(); files=[]; index=0; slideEl.removeAttribute('src');
     }
+    function doLogout(){accessToken=null; userEmail=null; logoutUI(); toast('로그아웃 되었습니다');}
 
-    function doLogout(){
-      accessToken = null; userEmail = null;
-      // GIS는 명시적 세션 종료 API가 없습니다. 토큰 만료를 기다리거나 페이지를 새로고침하세요.
-      // UX 차원에서 상태만 초기화합니다.
-      logoutUI();
-      toast('로그아웃 되었습니다');
-    }
-
-    /*** Drive에서 이미지 모두 가져오기(페이지네이션 포함) ***/
     async function loadAllImages(){
       if(!accessToken) throw new Error('accessToken 없음');
-      files = [];
-      let pageToken = undefined;
-      const q = encodeURIComponent(`'${DRIVE_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false`);
-      const fields = encodeURIComponent('nextPageToken, files(id,name,mimeType,modifiedTime)');
+      files=[]; let pageToken;
+      const q=encodeURIComponent(`'${DRIVE_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false`);
+      const fields=encodeURIComponent('nextPageToken, files(id,name,mimeType,modifiedTime)');
       do{
-        const url = `${API_BASE}/files?q=${q}&fields=${fields}&orderBy=modifiedTime&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true${pageToken?`&pageToken=${pageToken}`:''}`;
-        const res = await fetch(url, { headers:{ Authorization: `Bearer ${accessToken}` } });
-        if(!res.ok){
-          const t = await res.text();
-          console.error('Drive list error', t);
-          throw new Error('Drive 목록 조회 실패');
-        }
-        const data = await res.json();
+        const url=`${API_BASE}/files?q=${q}&fields=${fields}&orderBy=modifiedTime&pageSize=1000${pageToken?`&pageToken=${pageToken}`:''}`;
+        const res=await fetch(url,{headers:{Authorization:`Bearer ${accessToken}`}});
+        const data=await res.json();
         if(Array.isArray(data.files)) files.push(...data.files);
-        pageToken = data.nextPageToken;
+        pageToken=data.nextPageToken;
       }while(pageToken);
-
-      if(files.length === 0){
-        toast('폴더에 이미지가 없습니다');
-      }else{
-        toast(`${files.length}장 로드 완료`);
-      }
-      index = Math.min(index, Math.max(0, files.length - 1));
+      toast(`${files.length}장 로드 완료`);
+      index=Math.min(index,Math.max(0,files.length-1));
       show(index);
     }
 
-    /*** 파일 ID로 Blob을 받아 <img>에 표시 ***/
     async function show(i){
-      if(files.length === 0) { slideEl.removeAttribute('src'); return; }
-      index = (i + files.length) % files.length;
-      const file = files[index];
-      try{
-        const url = `${API_BASE}/files/${file.id}?alt=media`;
-        const res = await fetch(url, { headers:{ Authorization: `Bearer ${accessToken}` } });
-        if(!res.ok){
-          throw new Error('이미지 다운로드 실패');
-        }
-        const blob = await res.blob();
-        const objUrl = URL.createObjectURL(blob);
-        slideEl.src = objUrl;
-        slideEl.onload = () => {
-          // 이전 blob 해제(메모리 관리)
-          setTimeout(()=> URL.revokeObjectURL(objUrl), 1000);
-        }
-      }catch(err){
-        console.error(err);
-        toast('이미지 표시 중 오류');
-      }
+      if(files.length===0){slideEl.removeAttribute('src');counterEl.textContent='0 / 0';return;}
+      index=(i+files.length)%files.length;
+      const file=files[index];
+      const url=`${API_BASE}/files/${file.id}?alt=media`;
+      const res=await fetch(url,{headers:{Authorization:`Bearer ${accessToken}`}});
+      const blob=await res.blob();
+      const objUrl=URL.createObjectURL(blob);
+      slideEl.classList.remove('visible');
+      slideEl.src=objUrl;
+      slideEl.onload=()=>{
+        slideEl.classList.add('visible');
+        setTimeout(()=>URL.revokeObjectURL(objUrl),1000);
+      };
+      counterEl.textContent=`${index+1} / ${files.length}`;
     }
 
-    /*** 슬라이드쇼 컨트롤 ***/
-    function next(){ if(files.length){ show(index+1); } }
-    function prev(){ if(files.length){ show(index-1); } }
+    function next(){if(files.length){show(index+1);}}
+    function prev(){if(files.length){show(index-1);}}
 
-    function startSlideshow(){
-      playing = true;
-      playPauseBtn.textContent = '⏸ 일시정지';
-      restartTimer();
-    }
-    function stopSlideshow(){
-      playing = false;
-      playPauseBtn.textContent = '▶ 재생';
-      if(timer) { clearInterval(timer); timer = null; }
-    }
-    function restartTimer(){
-      if(timer) clearInterval(timer);
-      timer = setInterval(()=>{ next(); }, intervalMs);
-    }
-    function togglePlay(){
-      if(playing) stopSlideshow(); else startSlideshow();
+    function startSlideshow(){playing=true;playPauseBtn.textContent='⏸ 일시정지';restartTimer();}
+    function stopSlideshow(){playing=false;playPauseBtn.textContent='▶ 재생';if(timer){clearInterval(timer);timer=null;}}
+    function restartTimer(){if(timer)clearInterval(timer);timer=setInterval(()=>{next();},intervalMs);}
+    function togglePlay(){if(playing)stopSlideshow();else startSlideshow();}
+
+    function toggleFullScreen(){
+      if(!document.fullscreenElement){document.documentElement.requestFullscreen();}
+      else if(document.exitFullscreen){document.exitFullscreen();}
     }
   </script>
-
-  <!-- 📝 사용 방법
-    1) Google Cloud 콘솔에서 OAuth 클라이언트 ID(Web)를 발급하여 GOOGLE_CLIENT_ID에 넣습니다.
-    2) 슬라이드 대상이 될 구글 드라이브 폴더 ID를 DRIVE_FOLDER_ID에 넣습니다.
-       - 폴더 URL 예: https://drive.google.com/drive/folders/XXXX → 이때 XXXX가 폴더 ID
-    3) ALLOWED_EMAILS에 허용할 구글 계정을 추가하면 화이트리스트로 제한됩니다(선택).
-    4) 배포: Netlify/Cloudflare Pages 등에 업로드 후, OAuth 승인된 리디렉트/허용 도메인에 해당 URL을 등록하세요.
-    5) 폴더는 비공개여도 됩니다. 단, 로그인한 계정이 그 폴더(또는 상위 공유드라이브)에 최소 "보기" 권한을 가져야 합니다.
-       여러 사람이 볼 경우: (A) 각 시청자의 구글 계정을 폴더에 뷰어로 초대하거나, (B) 백엔드 프록시+서비스 계정 구조로 구현하세요.
-  -->
 </body>
 </html>

@@ -14,8 +14,11 @@
     *{box-sizing:border-box;margin:0;padding:0;}
     html,body{height:100%;width:100%;}
     body{
-      background:var(--bg); color:var(--fg);
+      margin:0;
+      background:var(--bg);
+      color:var(--fg);
       font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif;
+      overflow:hidden; /* ✅ 기본 스크롤 완전히 숨기기 */
     }
     .app{height:100%; display:grid; grid-template-rows:auto 1fr auto}
     header, footer{display:flex; align-items:center; gap:.75rem; padding:.6rem .9rem; transition:all 0.6s ease;}
@@ -167,6 +170,15 @@
         }
         if(e.key.toLowerCase()==='f') toggleFullScreen();
       });
+
+      // ✅ 전체화면 모드 진입/종료 시 스크롤 제어
+      document.addEventListener("fullscreenchange", () => {
+        if (document.fullscreenElement) {
+          document.body.style.overflow = "hidden";  // 전체화면 시 스크롤 완전 차단
+        } else {
+          document.body.style.overflow = "hidden";  // 전체화면 종료 후도 계속 차단 (원하시면 auto로 변경 가능)
+        }
+      });
     }
 
     function requestAccessToken(){tokenClient.requestAccessToken({prompt:'consent'});}
@@ -226,8 +238,13 @@
     function togglePlay(){if(playing)stopSlideshow();else startSlideshow();}
 
     function toggleFullScreen(){
-      if(!document.fullscreenElement){document.documentElement.requestFullscreen();}
-      else if(document.exitFullscreen){document.exitFullscreen();}
+      if(!document.fullscreenElement){
+        document.documentElement.requestFullscreen();
+        document.body.style.overflow = "hidden"; // 전체화면 들어가자마자 스크롤 숨김
+      } else if(document.exitFullscreen){
+        document.exitFullscreen();
+        document.body.style.overflow = "hidden"; // 전체화면 종료 시에도 스크롤 숨김 유지
+      }
     }
   </script>
 </body>
